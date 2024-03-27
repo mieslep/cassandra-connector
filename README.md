@@ -17,7 +17,14 @@ pip install git+https://github.com/mieslep/cassandra_connector.git
 
 ## Using
 
-The simplest approach is to set appropriate environment variables and then:
+The simplest approach is to set appropriate environment variables such as
+
+```bash
+ASTRA_DB_APPLICATION_TOKEN=AstraCS:<your token here>
+ASTRA_DB_API_ENDPOINT=https://<your endpoint here>
+```
+
+and then:
 
 ```python
 from cassandra_connector import CassandraConnectionsManager
