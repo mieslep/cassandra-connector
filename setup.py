@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="cassandra_connector",
-    version="0.1",
+    version="0.1.1",
     packages=find_packages(),
     install_requires=[
         "cassandra-driver>=3.29.1",
