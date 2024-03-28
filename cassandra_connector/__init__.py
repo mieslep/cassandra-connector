@@ -1,2 +1,2 @@
-from .CassandraConnector import CassandraConnectionsManager
-from .CassandraConnector import CassandraConnector
+from .cassandra_connector_manager import CassandraConnectorManager
+from .cassandra_connector import CassandraConnector

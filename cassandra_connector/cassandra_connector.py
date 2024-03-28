@@ -1,91 +1,9 @@
 from cassandra.cluster import Cluster
-import json
 import os
 import requests
 from tempfile import gettempdir
 import time
 from urllib.parse import urlparse
-
-class CassandraConnectionsManager:
-    """
-    Manages connections to Cassandra databases, including Astra DB, by storing
-    and utilizing connection parameters defined in environment variables or passed
-    dynamically. This manager supports both Cassandra and Astra DB connections,
-    initializing them as needed and providing a way to retrieve active connections.
-    """
-    def __init__(self):
-        """
-        Initializes the CassandraConnectionsManager instance by loading connection
-        parameters from optional environment variables for both Cassandra and Astra DB.
-        It sets up the structure for managing these connections.
-        """
-        self._connection_params = {}
-        self._connections = {}
-
-        # Store CASSANDRA connection params if CASSANDRA_CONNECTION env var is set
-        cassandra_conn_str = os.getenv("CASSANDRA_CONNECTION")
-        if cassandra_conn_str:
-            self._connection_params['env_cassandra'] = _parse_connection_args_json(cassandra_conn_str) 
-
-        # Store Astra connection params if Astra env vars are set
-        astra_token = os.getenv("ASTRA_DB_APPLICATION_TOKEN")
-        astra_endpoint = os.getenv("ASTRA_DB_API_ENDPOINT")
-        astra_db_id = os.getenv("ASTRA_DB_DATABASE_ID")
-        astra_db_region = os.getenv("ASTRA_DB_REGION")
-        astra_scb = os.getenv("ASTRA_DB_SECURE_BUNDLE_PATH")
-        if astra_token:
-            self._connection_params['env_astra'] = {'astra': {'token': astra_token, 'endpoint': astra_endpoint, 'datacenterID': astra_db_id, 'regionName': astra_db_region, 'scb': astra_scb}}
-
-    def get_connector(self, db_key='env_astra', **connection_args):
-        """
-        Retrieves an existing connection object based on the provided `db_key`, or
-        initializes a new connection if one does not already exist for the key. This
-        method accepts additional connection parameters dynamically, which must follow
-        a specific format depending on the type of database (Cassandra or Astra).
-
-        Connections specified in the environment may be accessed with db_key values of 
-        `env_astra` or `env_cassandra`. Otherwise, `connection_args` must be specified 
-        the first time a `db_key` is used.
-
-        See CassandraConnector class for format of `connection_args`.
-
-        Args:
-            db_key (str, optional): The key identifying the database connection to retrieve
-                or initialize. Defaults to 'env_astra', which corresponds to an Astra DB
-                connection specified in environment variables.
-            **connection_args: Arbitrary keyword arguments providing additional connection
-                parameters for initializing a new connection if necessary, following the
-                specific format requirements for Cassandra or Astra.
-
-        Returns:
-            object: An instance of the CassandraConnector corresponding to the specified
-                `db_key`, configured according to the provided `connection_args`.
-
-        Raises:
-            ValueError: If the `db_key` is not recognized, the connection parameters
-                were not provided or did not follow the required format, or if the
-                connection could not be initialized due to an error.
-        """
-        # Return the existing connector if it's already initialized
-        if db_key in self._connections:
-            return self._connections[db_key]
-        
-        if db_key not in self._connection_params and connection_args:
-            self._connection_params[db_key] = connection_args
-
-        if db_key in self._connection_params:
-            try:
-                params = self._connection_params[db_key]
-                self._connections[db_key] = CassandraConnector(**params)
-                print(f"Connection for '{db_key}' initialized successfully.")
-            except Exception as e:
-                print(f"Failed to setup connection for '{db_key}'")
-                print(f"Error: {str(e)}")
-                raise ValueError(f"Connection for '{db_key}' could not be initialized.")
-            return self._connections[db_key]
-
-        # If the connection key is not recognized or parameters were not provided
-        raise ValueError(f"Connection parameters for '{db_key}' not configured.")
 
 class CassandraConnector:
     """
@@ -111,7 +29,7 @@ class CassandraConnector:
 
         For Cassandra connections, `connection_args` should include:
           - "authProviderClass": The authentication provider class from the DataStax Python driver
-            (e.g., "cassandra.auth.PlainTextAuthProvider").
+            (e.g., "cassandra.auth.PlainTextAuthProvider"). This must be an importable path.
           - "authProviderArgs": A dictionary of arguments for the authentication provider class
             (e.g., {"username": "cassandra", "password": "cassandra"}).
           - Additional connection options such as "contact_points" and "port" that you would use
@@ -124,8 +42,9 @@ class CassandraConnector:
 
         For Astra backwards compatbility with connection mechanics such as CassIO, the 'endpoint' may be 
         omitted from `connection_args`, and the following provided:
-          - 'datacenterID': DB ID of the database
           - 'scb': Filesystem path to secure connect bundle
+          or
+          - 'datacenterID': DB ID of the database
           - 'regionName': Astra region entry point (optional, will default to primary region)
 
         Example for Cassandra:
@@ -151,17 +70,37 @@ class CassandraConnector:
             self._setup_cassandra_connection()
 
     @property
-    def session(self, new=False):
+    def session(self, new=False, replace=False):
         """
-        Provides access to the session object for executing queries.
+        Provides access to the Cassandra session object for executing queries. This property allows
+        for the retrieval of the current session, the creation of a new session instance without
+        affecting the current session, or the replacement of the current session with a new one.
 
         Args:
-            new (bool): If True, creates a new session instance instead of returning
-                the one created at class instantiation. Defaults to False.
+            new (bool): If True, creates and returns a new session instance without replacing the
+                current session maintained by the class instance. This allows for temporary sessions
+                that do not interfere with the existing session's state. Defaults to False, which
+                results in returning the existing session.
+
+            replace (bool): If True, shuts down the current session and replaces it with a new one.
+                This new session becomes the session returned by subsequent calls to this property.
+                If `new` is also True, `new` takes precedence, and a new session is created and
+                returned without replacing the current session. Defaults to False.
 
         Returns:
-            Session: session object for the Cassandra cluster.
+            cassandra.cluster.Session: The session object for interacting with the Cassandra cluster.
+                Depending on the parameters, this could be the existing session, a new session that
+                replaces the existing one, or a new temporary session.
+
+        Note:
+            Using the `replace` option will shut down the existing session and create a new one. It's
+            important to ensure that no operations are pending or currently using the old session
+            before replacing it, as this could lead to interrupted operations or resource leaks.
         """
+        if replace:
+            self._session.shutdown()
+            self._session = self._cluster.connect()
+            return self._session
         if new:
             return self._cluster.connect()
         return self._session
@@ -310,21 +249,3 @@ class CassandraConnector:
                 raise ValueError(f"Specific bundle for region '{astra_args['regionName']}' not found.")
 
         return download_url
-
-def _parse_connection_args_json(conn_args_str):
-    """
-    Parses a connection arguments string in JSON format into a Python dictionary.
-
-    Args:
-        conn_args_str (str): Connection arguments as a JSON-formatted string.
-
-    Returns:
-        dict: Connection arguments as a dictionary.
-    """
-    try:
-        conn_args_dict = json.loads(conn_args_str)
-    except json.JSONDecodeError as e:
-        raise ValueError(f"Error parsing connection arguments: {str(e)}")
-
-    return conn_args_dict
-
