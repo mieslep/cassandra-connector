@@ -9,10 +9,8 @@ This package provides a helpful wrapper around the `cassandra-driver` package wi
 
 ## Installing
 
-Until such time as this is published in PyPI, install from the GitHub repo directly:
-
 ```bash
-pip install git+https://github.com/mieslep/cassandra-connector.git
+pip install cassandra-connector
 ```
 
 ## Using
